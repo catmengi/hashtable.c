@@ -11,7 +11,7 @@ hashtable realization using two different collision handling methods
   
   -return 3 : malloc errors
   
-  -return NULL : error
+  -return NULL : error  / not found
 
   **functions:**
   
