@@ -13,7 +13,12 @@ error codes:
   -return NULL : error
   
   hashtable* hashtable_new();                              //create new hashtable
+  
  int hashtable_add(hashtable* ht, char* key, void* vptr); //add key with void* as data, if key exist this will change his data
+ 
  void* hashtable_get(hashtable* ht, const char* key);     //get key's data, if not exist or some error return NULL
+ 
  int hashtable_free(hashtable* ht);                       //free hashtable, dont affect data
+ 
  int hashtable_remove(hashtable* ht, char* key);          //remove key from hashtable
+ 
