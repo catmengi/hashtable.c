@@ -1,6 +1,7 @@
 # hashtable.c
 hashtable realization using two different collision handling methods
-error codes:
+
+**error codes:**
 
   -return 0 : no error
   
