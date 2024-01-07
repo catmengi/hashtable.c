@@ -22,7 +22,7 @@ typedef struct ht_bucket ht_bucket;
 
 typedef struct hashtable
 {
-    ht_bucket* bucket; //bucket array
+    ht_bucket* bucket;                //bucket array
     ht_cont_llist* cont_llist_head;   //linked list for intermediate data storage
     ht_cont_llist* cont_llist_tail;   //tail of intermediate data storage linked list;
     uint64_t size;                    //amount of buckets
@@ -136,7 +136,7 @@ uint64_t _ht_get_cont_len(hashtable* ht)
 int hashtable_rehash(hashtable* ht)
 {
     if(!ht)
-        return NULL;
+        return 1;
     ht_cont_llist* tmp_l = ht->cont_llist_head;
     uint64_t old_size = ht->size;
     uint64_t len = _ht_get_cont_len(ht);
@@ -473,7 +473,7 @@ int hashtable_remove(hashtable* ht, char* key)
     ht_ent_llist* tmp_e = NULL;
     ht_cont_llist* tmp_l = NULL;
     if(ht->bucket[index].used == 0)
-        return 2;
+        return 0;
     if(ht->bucket[index].used != 0 )
     {
         int i = 0;
@@ -485,23 +485,36 @@ int hashtable_remove(hashtable* ht, char* key)
             {
                 tmp_l = ht->bucket[index].ent_llists[i]->parent;
                 tmp_e = ht->bucket[index].ent_llists[i];
+                if(ht->bucket[index].used - 1 == i)
+                    ht->bucket[index].used--;
                 break;
             }
           }
         }
+        int nu = 0;
+        for(int i = 0; i < ht->bucket[index].used;i++)
+        {
+            if(ht->bucket[index].ent_llists[i] == NULL)
+                nu++;
+        }
+        if(nu == (ht->bucket[index].used - 1))
+        {
+            ht->bucket[index].used = 0;
+            ht->free_buckets++;
+        }
         if(tmp_l)
         {
-            if(tmp_e->prev == NULL)
-            {
                 if(tmp_e->next == NULL)
                 {
                     free(tmp_e->key);
+                    //free(tmp_e);
                     tmp_e->key = NULL;
                     tmp_e->vptr = NULL;
                     _ht_cont_ll_remove(ht,tmp_l);
                     ht->bucket[index].ent_llists[i] = NULL;
-                    if(ht->bucket[index].used == i+1)
+                    if(ht->bucket[index].used == i+1 && ht->bucket[index].used >= 1)
                         ht->bucket[index].used--;
+                    return 0;
                 }
                 if(tmp_e->next != NULL)
                 {
@@ -522,7 +535,7 @@ int hashtable_remove(hashtable* ht, char* key)
                             {
                                 tmp_l->ent_llist = tmp_e->next;
                                 ht->bucket[index].ent_llists[i] = tmp_l->ent_llist;
-                                tmp_e->prev = NULL;
+                                tmp_e->next->prev = NULL;
                             }
                         }
                         if(tmp_e->next == NULL)
@@ -544,11 +557,12 @@ int hashtable_remove(hashtable* ht, char* key)
                         tmp_e->vptr = NULL;
                         free(tmp_e);
                         tmp_e = NULL;
+                        printf("I AM BORN!\n");
                         return 0;
                     }
-                    return 2;
                 }
-            }
         }
+        if(!tmp_l)
+            return 0;
     }
 }

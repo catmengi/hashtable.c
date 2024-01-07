@@ -17,19 +17,19 @@ typedef struct hashtable
 
 typedef struct ht_bucket
 {
-    ht_ent_llist** ent_llists;
-    uint64_t size;
-    uint64_t used;
+    ht_ent_llist** ent_llists;    //ent_llist store pointer to ht_ent_llist struct containing keys and data, used to retriev data from bucket
+    uint64_t size;                //max ammount of ent_llist, internal usage
+    uint64_t used;                //ammount of current used ent_llists, internal usage
 }ht_bucket;
 
 typedef struct ht_ent_llist
 {
-    ht_cont_llist* parent;
-    ht_ent_llist* next;
-    ht_ent_llist* prev;
-    char* key;
-    uint64_t key_len;
-    void* vptr;
+    ht_cont_llist* parent;         //pointer to parent ht_cont_llist struct internal usage
+    ht_ent_llist* next;            //pointer to next key internal usage
+    ht_ent_llist* prev;            // pointer to previus key, internal usage
+    char* key;                     //key for acces, normal null terminated string
+    uint64_t key_len;              //unused currently
+    void* vptr;                    //data of key
 }ht_ent_llist;
 typedef struct ht_cont_llist
 {
@@ -42,12 +42,10 @@ typedef struct ht_cont_llist
 
 /*functions for hashtable manipulations*/
 
-int hashtable_rehash(hashtable* ht);
-hashtable* hashtable_new();
-int hashtable_coll_conf(hashtable* ht, uint64_t coll_per_buck);
-int hashtable_add(hashtable* ht, char* key, void* vptr);
-void* hashtable_get(hashtable* ht, const char* key);
-int hashtable_free(hashtable* ht);
-int _ht_cont_ll_remove(hashtable* ht, ht_cont_llist* ll_p);
-int hashtable_remove(hashtable* ht, char* key);
-char* strdup_s(const char* str);
+/*int hashtable_rehash(hashtable* ht); internal used function!*/
+hashtable* hashtable_new();                              //create new hashtable
+int hashtable_add(hashtable* ht, char* key, void* vptr); //add key with void* as data, if key exist this will change his data
+void* hashtable_get(hashtable* ht, const char* key);     //get key's data, if not exist or some error return NULL
+int hashtable_free(hashtable* ht);                       //free hashtable, dont affect data
+int hashtable_remove(hashtable* ht, char* key);          //remove key from hashtable
+char* strdup_s(const char* str);                         //strdup but it checking return value of malloc
