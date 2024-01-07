@@ -473,7 +473,7 @@ int hashtable_remove(hashtable* ht, char* key)
     ht_ent_llist* tmp_e = NULL;
     ht_cont_llist* tmp_l = NULL;
     if(ht->bucket[index].used == 0)
-        return 0;
+        return 2;
     if(ht->bucket[index].used != 0 )
     {
         int i = 0;
@@ -563,6 +563,6 @@ int hashtable_remove(hashtable* ht, char* key)
                 }
         }
         if(!tmp_l)
-            return 0;
+            return 2;
     }
 }
