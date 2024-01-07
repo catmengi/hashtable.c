@@ -12,8 +12,10 @@ hashtable realization using two different collision handling methods
   -return 3 : malloc errors
   
   -return NULL : error
+
+  **functions:**
   
-  hashtable* hashtable_new();                              create new hashtable
+ hashtable* hashtable_new();                              create new hashtable
   
  int hashtable_add(hashtable* ht, char* key, void* vptr);   add key with void* as data, if key exist this will change his data
  
