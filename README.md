@@ -6,4 +6,3 @@ error codes:
   -return 2 : not found
   -return 3 : malloc errors
   -return NULL : error
-  -
