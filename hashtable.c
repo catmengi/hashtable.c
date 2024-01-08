@@ -583,7 +583,6 @@ int hashtable_remove(hashtable* ht, char* key)
                         tmp_e->vptr = NULL;
                         free(tmp_e);
                         tmp_e = NULL;
-                        printf("I AM BORN!\n");
                         return 0;
                     }
                 }
