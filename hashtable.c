@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+
 #define ALLOC_ERR 2
 #define ARG_ERR 1
 #define ENOTFOUND 4
@@ -628,69 +629,4 @@ int hashtable_remove_entry(struct hashtable* ht,char* key,uint32_t keylen)
             return 0;
         }
     }
-}
-
-int main(void)
-{
-    struct hashtable* ht = NULL;
-    hashtable_create(&ht,1999181,1);
-    char buffer[512];
-    FILE* fp = fopen("words.txt","r");
-    if(!fp){
-        perror("fopen");
-        exit(1);
-    }
-    while(fgets(buffer,512,fp))
-    {
-        if(hashtable_add(ht,strdup(buffer),strlen(buffer),strdup(buffer),123)){
-            printf("PANIC\n");
-            getchar();
-            exit(1);
-        }
-        printf("%s",buffer);
-    }
-    fseek(fp,0,SEEK_SET);
-    //hashtable_add(ht,strdup("zupanate"),strlen("zupafnate"),strdup("zupanate"),123);
-        char* out = NULL;
-    //hashtable_add(ht,strdup("zupanate"),strlen("zupafnate"),strdup("zupanate"),123);
-    struct ht_llist* tmp_l = ht->llist_head;
-    printf("empty %d\n ammount %d\n",ht->empty,ht->bucket_amm);
-    printf("press to start\n");
-    getchar();
-    while(tmp_l != NULL){
-            struct ht_entry* tmp_e = tmp_l->entry;
-            int i = 0;
-            while(tmp_e != NULL){
-                void* key = NULL;
-                hashtable_get_key(ht,tmp_e->key,tmp_e->keylen,&key);
-                int ret = hashtable_remove_entry(ht,tmp_e->key,tmp_e->keylen);
-                int ret2 = 0;
-                if(ret != 0){
-                    ret2 = hashtable_get(ht,tmp_e->key,tmp_e->keylen,&out);
-                    printf("%d,%s : %d %d\n",ret,tmp_e->key,ret2,i);
-                    *(int*)0x123 = 1;
-                }
-                free(key);
-                if(tmp_e)
-                    tmp_e = tmp_e->next;
-                else
-                    break;
-                i++;
-            }
-        tmp_l = tmp_l->next;
-    }
-    printf("empty %d\n",ht->empty);
-    printf("press to start\n");
-    getchar();
-    while(fgets(buffer,512,fp))
-    {
-        if(hashtable_add(ht,strdup(buffer),strlen(buffer),strdup(buffer),123)){
-            printf("PANIC\n");
-            getchar();
-            exit(1);
-        }
-        buffer[0] = '\0';
-        printf("i am not dead yet\n");
-    }
-    printf("empty %d\n",ht->empty);
 }
