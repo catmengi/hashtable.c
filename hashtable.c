@@ -1,584 +1,696 @@
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
-#define DEFAULT_SIZE  32
-#define MAX_ENT_PER_BUCKET 16    //lower values can easily enter infinity rehash state and very big memory consumption
-char* strdup_s(const char* str)
-{
-    if(!str)
-        return NULL;
-    char* nstr = malloc(strlen(str)+1);
-    if(!nstr)
-        return NULL;
-    strcpy(nstr,str);
-    return nstr;
-}
+#include <stdbool.h>
+#define ALLOC_ERR 2
+#define ARG_ERR 1
+#define ENOTFOUND 4
+#define ENOSPACE 3
 
-typedef struct hashtable hashtable;
-typedef struct ht_cont_llist ht_cont_llist;
-typedef struct ht_ent_llist ht_ent_llist;
-typedef struct ht_bucket ht_bucket;
-
-typedef struct hashtable
-{
-    ht_bucket* bucket;                //bucket array
-    ht_cont_llist* cont_llist_head;   //linked list for intermediate data storage
-    ht_cont_llist* cont_llist_tail;   //tail of intermediate data storage linked list;
-    uint64_t size;                    //amount of buckets
-    uint64_t free_buckets;            //amount of free buckets
-    uint64_t coll_per_buck;
-}hashtable;
-
-typedef struct ht_bucket
-{
-    ht_ent_llist** ent_llists;
-    uint64_t size;
-    uint64_t used;
-}ht_bucket;
-
-typedef struct ht_ent_llist
-{
-    ht_cont_llist* parent;
-    ht_ent_llist* next;
-    ht_ent_llist* prev;
-    char* key;
-    uint64_t key_len;
-    void* vptr;
-}ht_ent_llist;
-typedef struct ht_cont_llist
-{
+struct ht_llist{
     uint64_t hash;
-    ht_ent_llist* ent_llist;
-    ht_cont_llist* next;
-    ht_cont_llist* prev;
-}ht_cont_llist;
 
+    struct ht_entry* entry;
+    struct ht_entry* last_acc;
 
-int hashtable_rehash(hashtable* ht);
-hashtable* hashtable_new();
-int hashtable_coll_conf(hashtable* ht, uint64_t coll_per_buck);
-int hashtable_add(hashtable* ht, char* key, void* vptr);
-void* hashtable_get(hashtable* ht, const char* key);
-int hashtable_free(hashtable* ht);
-int _ht_cont_ll_remove(hashtable* ht, ht_cont_llist* ll_p);
-int hashtable_remove(hashtable* ht, char* key);
-char* strdup_s(const char* str);
+    struct ht_llist* next;
+    struct ht_llist* prev;
+};
 
-uint64_t hash_func ( const char * key)
+struct ht_entry{
+    char* key;
+    uint32_t keylen;
+
+    void* data;
+    uint64_t meta;
+
+    struct ht_entry* next;
+    struct ht_entry* prev;
+    struct ht_llist* parent;
+};
+
+struct ht_llist_cont{
+    struct ht_llist* llist;    //list of key/value pairs
+    struct ht_llist_cont* next; //separate chaining
+    struct ht_llist_cont* prev;
+};
+
+struct ht_bucket{
+    struct ht_llist_cont* llist_cont;  //pointer to container
+    struct ht_bucket* next;  //pointer to next bucket(only valid if full is true)
+    struct ht_bucket* prev;
+    uint32_t occup;
+    bool full;    //if true we go to the "next" or try to found next free bucket but if hashtable is full we try to rehash;
+    bool freed;
+};
+
+struct hashtable{
+    struct ht_bucket* bucket;
+    struct ht_llist* llist_head;
+    struct ht_llist* llist_tail;
+    uint32_t bucket_amm;
+    uint32_t coll_pbuck;
+    uint32_t empty;
+    uint32_t rehashes;
+};
+
+uint64_t _hash_fnc(char* str,uint32_t keylen)
 {
-  uint64_t h = (525201411107845655ull);
-  for (;*key;++key)
-  {
-    h ^= *key;
-    h *= 0x5bd1e9955bd1e995;
-    h ^= h >> 47;
-  }
+    uint64_t h = (525201411107845655ull);
+    //h = 0;
+  for (int i =0; i < keylen; i++,str++){
+        h ^= *str;
+        h *= 0x5bd1e9955bd1e995;
+        h ^= h >> 47;
+    }
+ /*  for(int i = 0; i < keylen; i ++, str++){
+    if(*str >= 10 && *str<=100){
+        h *= 100;
+    }
+    if(*str >= 100){
+        h*= 1000;
+    }
+    h += *str + 31 * h;
+}*/
   return h;
 }
 
-hashtable* hashtable_new()
-{
-    hashtable* ht = calloc(1,sizeof(*ht));
-    if(!ht)
-        return NULL;
-    ht->bucket = calloc(DEFAULT_SIZE,sizeof(*ht->bucket));
-    if(!ht->bucket)
-        return NULL;
-    ht->size = DEFAULT_SIZE;
-    ht->free_buckets = DEFAULT_SIZE;
-    ht->cont_llist_head = calloc(1,sizeof(*ht->cont_llist_head));
-    if(!ht->cont_llist_head)
-        return NULL;
-    ht->cont_llist_head->prev = NULL;
-    ht->cont_llist_head->ent_llist = NULL;
-    ht->cont_llist_tail = ht->cont_llist_head;
-    for(int i = 0; i < DEFAULT_SIZE; i++)
-    {
-        ht->bucket[i].ent_llists = calloc(MAX_ENT_PER_BUCKET,sizeof(*ht->bucket[i].ent_llists));
-        if(!ht->bucket[i].ent_llists)
-            return NULL;
-        ht->bucket[i].size = MAX_ENT_PER_BUCKET;
-        ht->bucket[i].used = 0;
-    }
-    ht->coll_per_buck = MAX_ENT_PER_BUCKET;
-    return ht;
-}
-int hashtable_coll_conf(hashtable* ht, uint64_t coll_per_buck)
+int hashtable_create(struct hashtable** ht,size_t size,size_t coll_pbuck)
 {
     if(!ht)
-        return 1;
-    if(coll_per_buck < 8)
-        coll_per_buck = 8;
-    uint64_t old_coll = ht->coll_per_buck;
-    ht->coll_per_buck = coll_per_buck;
-    if(hashtable_rehash(ht) != 0)
-    {
-        ht->coll_per_buck = old_coll;
-        if(hashtable_rehash(ht) != 0)
-            return 1;
-    }
+        return ARG_ERR;
+    *ht= calloc(1,sizeof(*(*ht)));
+    if(!*ht)
+        return ALLOC_ERR;
+    (*ht)->bucket_amm = size;
+    (*ht)->coll_pbuck = coll_pbuck;
+    (*ht)->empty = (*ht)->bucket_amm -1;
+    (*ht)->bucket = calloc((*ht)->bucket_amm,sizeof(*(*ht)->bucket));
+    if(!(*ht)->bucket)
+        return ALLOC_ERR;
+    (*ht)->llist_head = calloc(1,sizeof(*(*ht)->llist_head));
+    if(!(*ht)->llist_head)
+        return ALLOC_ERR;
+    (*ht)->llist_tail = (*ht)->llist_head;
     return 0;
 }
-uint64_t _ht_get_cont_len(hashtable* ht)
+int hashtable_rehash(struct hashtable* ht,uint64_t size);
+int hashtable_add(struct hashtable* ht,char* key,uint32_t keylen,void* vptr,uint64_t meta)
 {
     if(!ht)
-        return 0;
-    uint64_t len = 0;
-    ht_cont_llist* tmp_l = ht->cont_llist_head;
-    while(tmp_l != NULL)
-    {
-        len++;
-        tmp_l = tmp_l->next;
-    }
-    return len;
-}
-int hashtable_rehash(hashtable* ht)
-{
-    if(!ht)
-        return 1;
-    ht_cont_llist* tmp_l = ht->cont_llist_head;
-    uint64_t old_size = ht->size;
-    uint64_t len = _ht_get_cont_len(ht);
-    ht->size += len;
-    ht->free_buckets += len;
-    for(int i = 0; i < old_size;i++)
-    {
-       free(ht->bucket[i].ent_llists);
-    }
-    free(ht->bucket);
-    ht->bucket = calloc(ht->size,sizeof(*ht->bucket));
-    if(!ht->bucket)
-        return 1;
-    for(int i = 0; i < ht->size; i++)
-    {
-        ht->bucket[i].ent_llists = calloc(ht->coll_per_buck,sizeof(*ht->bucket[i].ent_llists));
-        if(!ht->bucket[i].ent_llists)
-            return 1;
-        ht->bucket[i].size = ht->coll_per_buck;
-        ht->bucket[i].used = 0;
-    }
-    while(tmp_l != NULL)
-    {
-WRITE:
-        //printf(",%p\n",tmp_l);
-        uint64_t index = tmp_l->hash % ht->size;
-        if(ht->bucket[index].used < (ht->bucket[index].size))
-        {
-            ht->bucket[index].ent_llists[ht->bucket[index].used] = tmp_l->ent_llist;
-            ht->bucket[index].used++;
-        }
-        else
-        {
-            if(hashtable_rehash(ht) == 0)
-            {
-                goto WRITE;
-            }
-            else
-                return 1;
-        }
-        tmp_l = tmp_l->next;
-    }
-    return 0;
-}
-int hashtable_add(hashtable* ht, char* key, void* vptr)
-{
-  if(!ht)
-      return 1;
-  if(!key)
-      return 2;
-  if(ht->free_buckets == 0)
-      if(hashtable_rehash(ht) != 0)
-          return 1;
-START:
-  uint64_t hash = hash_func(key);
-  uint64_t index = hash % ht->size;
-  if(ht->cont_llist_tail->hash == hash)
-  {
-      if(ht->bucket[index].used == ht->bucket[index].size)
-      {
-          if(hashtable_rehash(ht) != 0)
-              return 1;
-          else
-              goto START;
-      }
-      ht->bucket[index].ent_llists[ht->bucket[index].used] = ht->cont_llist_tail->ent_llist;
-      ht->bucket[index].used++;
-  }
-  if(ht->bucket[index].used == 0)
-  {
-    if(ht->cont_llist_tail->hash == 0)
-    {
-        ht->cont_llist_tail->hash = hash;
-        ht->cont_llist_tail->ent_llist = malloc(sizeof(*ht->cont_llist_tail->ent_llist));
-        ht->cont_llist_tail->ent_llist->prev = NULL;
-        if(!ht->cont_llist_tail->ent_llist)
-            return 3;
-        ht->cont_llist_tail->ent_llist->key = strdup_s(key);
-        if(!ht->cont_llist_tail->ent_llist->key)
-            return 3;
-        ht->cont_llist_tail->ent_llist->key_len = strlen(key);
-        ht->cont_llist_tail->ent_llist->vptr = vptr;
-        ht->cont_llist_tail->ent_llist->next = NULL;
-        ht->cont_llist_tail->ent_llist->parent = ht->cont_llist_tail;
-        ht->cont_llist_tail->next = NULL;
-        ht->cont_llist_tail->prev = NULL;
-        ht->bucket[index].ent_llists[ht->bucket[index].used] = ht->cont_llist_tail->ent_llist;
-        ht->bucket[index].used++;
-        ht->free_buckets--;
-        return 0;
-    }
-    if(ht->cont_llist_tail->hash != 0)
-    {
-     //   printf("new ll");
-        ht->cont_llist_tail->next = malloc(sizeof(*ht->cont_llist_tail->next));
-        if(!ht->cont_llist_tail->next)
-            return 3;
-        ht->cont_llist_tail->next->prev = ht->cont_llist_tail;
-        ht->cont_llist_tail = ht->cont_llist_tail->next;
-        ht->cont_llist_tail->hash = hash;
-        ht->cont_llist_tail->next = NULL;
-        ht->cont_llist_tail->ent_llist = malloc(sizeof(*ht->cont_llist_tail->ent_llist));
-        if(!ht->cont_llist_tail->ent_llist)
-            return 3;
-        ht->cont_llist_tail->ent_llist->key = strdup_s(key);
-        if(!ht->cont_llist_tail->ent_llist->key)
-            return 3;
-        ht->cont_llist_tail->ent_llist->key_len = strlen(key);
-        ht->cont_llist_tail->ent_llist->vptr = vptr;
-        ht->cont_llist_tail->ent_llist->parent = ht->cont_llist_tail;
-        ht->cont_llist_tail->ent_llist->prev = NULL;
-        ht->cont_llist_tail->ent_llist->next = NULL;
-        ht->bucket[index].ent_llists[ht->bucket[index].used] = ht->cont_llist_tail->ent_llist;
-        ht->bucket[index].used++;
-        ht->free_buckets--;
-        return 0;
-    }
-  }
-  if(ht->bucket[index].used != 0)
-  {
-    ht_cont_llist* tmp_l = NULL;
-    for(int i = 0; i < ht->bucket[index].used; i++)
-    {
-      if(ht->bucket[index].ent_llists[i] != NULL)
-        if(ht->bucket[index].ent_llists[i]->parent->hash == hash)
-            tmp_l = ht->bucket[index].ent_llists[i]->parent;
-    }
-    if(tmp_l)
-    {
-        ht_ent_llist* tmp_e = tmp_l->ent_llist;
-        if(!tmp_e)
-            return 1;
-        while(tmp_e->next != NULL && strcmp(tmp_e->key,key) != 0)
-            tmp_e = tmp_e->next;
-        if(strcmp(tmp_e->key,key) == 0)
-        {
-            tmp_e->vptr = vptr;
-            return 0;
-        }
-        tmp_e->next = malloc(sizeof(*tmp_e->next));
-        if(!tmp_e->next)
-            return 3;
-        tmp_e->next->prev = tmp_e;
-        tmp_e = tmp_e->next;
-        tmp_e->parent = tmp_l;
-        tmp_e->key = strdup_s(key);
-        tmp_e->key_len = strlen(key);
-        tmp_e->vptr = vptr;
-        tmp_e->next = NULL;
-    }
-    if(!tmp_l)
-    {
-      //printf("%p\n",ht->cont_llist_tail);
-      ht->cont_llist_tail->next = malloc(sizeof(*ht->cont_llist_tail));
-      if(!ht->cont_llist_tail->next)
-          return 3;
-      ht->cont_llist_tail->next->prev = ht->cont_llist_tail;
-      ht->cont_llist_tail = ht->cont_llist_tail->next;
-      ht->cont_llist_tail->ent_llist = malloc(sizeof(*ht->cont_llist_tail->ent_llist));
-      if(!ht->cont_llist_tail->ent_llist)
-          return 3;
-      ht->cont_llist_tail->hash = hash;
-      ht->cont_llist_tail->ent_llist->key = strdup_s(key);
-      ht->cont_llist_tail->ent_llist->parent = ht->cont_llist_tail;
-      ht->cont_llist_tail->ent_llist->vptr = vptr;
-      ht->cont_llist_tail->ent_llist->key_len = strlen(key);
-      ht->cont_llist_tail->ent_llist->next = NULL;
-      ht->cont_llist_tail->ent_llist->prev = NULL;
-      ht->cont_llist_tail->next = NULL;
-      if(ht->bucket[index].used == ht->bucket[index].size)
-      {
-          if(hashtable_rehash(ht) != 0)
-              return 1;
-          else
-              goto START;
-      }
-      ht->bucket[index].ent_llists[ht->bucket[index].used] = ht->cont_llist_tail->ent_llist;
-      ht->bucket[index].used++;
-      return 0;
-    }
-
-  }
-  return 1;
-}
-
-void* hashtable_get(hashtable* ht, const char* key)
-{
-    if(!ht)
-    {
-        return NULL;
-    }
+        return ARG_ERR;
     if(!key)
-    {
-        return NULL;
-    }
-    uint64_t hash = hash_func(key);
-    uint64_t index = hash % ht->size;
-    if(ht->bucket[index].used == 0)
-    {
-        return NULL;
-    }
-    if(ht->bucket[index].used == 1)
-    {
-        if(ht->bucket[index].ent_llists[0]->parent->hash == hash)
-        {
-            if(ht->bucket[index].ent_llists[0]->key != NULL)
-            {
-                if(strcmp(ht->bucket[index].ent_llists[0]->key,key) == 0)
-                    return ht->bucket[index].ent_llists[0]->vptr;
-                else
-                {
-                    return NULL;
-                }
+        return ARG_ERR;
+    uint64_t hash = _hash_fnc(key,keylen);
+    uint64_t index = hash % ht->bucket_amm;
+    struct ht_llist* tmp_l = NULL;
+    struct ht_llist_cont* tmp_c = NULL;
+    struct ht_bucket* bucket = NULL;
+    struct ht_entry* tmp_e = NULL;
+    if(ht->empty == 0){
+        int ret = 0;
+        ret = hashtable_rehash(ht,ht->bucket_amm + (ht->bucket_amm * 0.75f));
+        if(ret == ENOSPACE){
+            while(ret == ENOSPACE){
+                ret = hashtable_rehash(ht,ht->bucket_amm + (ht->bucket_amm * 0.75f));
             }
-            else
-                return NULL;
         }
-        return NULL;
+        if(ret != 0) return ret;
+        index = hash % ht->bucket_amm;
+        if(ht->rehashes % 10)
+            ht->coll_pbuck++;
+        ht->rehashes++;
+        //todo rehash!!!!
     }
-    if(ht->bucket[index].used > 1)
-    {
-        ht_cont_llist* tmp_l = NULL;
-        for(int i = 0; i < ht->bucket[index].used; i++)
-        {
-          if(ht->bucket[index].ent_llists[i] != NULL)
-            if(ht->bucket[index].ent_llists[i]->parent->hash == hash)
-                tmp_l = ht->bucket[index].ent_llists[i]->parent;
+    if(ht->bucket[index].full == true){
+        bucket = &ht->bucket[index];
+        for(int i = index; i < ht->bucket_amm && i != (index - 1); i++){
+            while(bucket->next != NULL && bucket->full == true) bucket = bucket->next;
+
+            if(bucket->freed == true){
+                memset(bucket,0,sizeof(*bucket));
+            }
+            if(bucket->full == false) break;
+
+            if(ht->bucket[i].full == false){
+                bucket->next = &ht->bucket[i];
+                bucket->next->prev = bucket;
+            }
+
+            if(i == ht->bucket_amm - 1) i = 0;
         }
-        if(tmp_l == NULL)
-        {
-            return NULL;
+    }else{
+        bucket = &ht->bucket[index];
+    }
+    if(bucket->llist_cont == NULL){
+        if(bucket->freed == true)
+            bucket->freed = false;
+        //printf("new bucket or empty bucket\n");
+        bucket->llist_cont = calloc(1,sizeof(*bucket->llist_cont));
+        if(!bucket->llist_cont)
+            return ALLOC_ERR;
+        if(ht->llist_tail->entry == NULL)
+            tmp_l = ht->llist_tail;
+        else{
+            tmp_l = calloc(1,sizeof(*tmp_l));
+            if(!tmp_l)
+                return ALLOC_ERR;
+            tmp_l->prev = ht->llist_tail;
+            ht->llist_tail->next = tmp_l;
+            ht->llist_tail = tmp_l;
         }
-        if(tmp_l != NULL)
-        {
-            ht_ent_llist* tmp_e = tmp_l->ent_llist;
-            while(tmp_e->next != NULL && strcmp(tmp_e->key,key) != 0)
+        tmp_l->entry = calloc(1,sizeof(*tmp_l->entry));
+        if(!tmp_l->entry)
+            return ALLOC_ERR;
+        tmp_l->hash = hash;
+        tmp_e = tmp_l->entry;
+        tmp_e->parent = tmp_l;
+        tmp_e->data = vptr;
+        tmp_e->key = key;
+        tmp_e->keylen = keylen;
+        tmp_e->meta = meta;
+        bucket->llist_cont->llist = tmp_l;
+        ht->empty--;
+        bucket->occup++;
+        if(bucket->occup == ht->coll_pbuck)
+            bucket->full = true;
+        return 0;
+    }else{
+        tmp_c = bucket->llist_cont;
+        while(tmp_c->next != NULL && tmp_c->llist->hash != hash) tmp_c = tmp_c->next;
+        if(tmp_c->llist->hash == hash){
+            tmp_l = tmp_c->llist;
+            tmp_e = tmp_l->entry;
+            while(tmp_e->next != NULL && strcmp(tmp_e->key , key) != 0){
                 tmp_e = tmp_e->next;
-            if(tmp_e->key == NULL)
-                return NULL;
-            if(strcmp(tmp_e->key,key) == 0)
-                return tmp_e->vptr;
-            return NULL;
-        }
-    }
-}
-int hashtable_free(hashtable* ht)
-{
-    if(!ht)
-        return 1;
-    ht_cont_llist* tmp_l = ht->cont_llist_head;
-    ht_ent_llist* tmp_e = NULL;
-    for(int i = 0; i < ht->size; i++)
-    {
-        free(ht->bucket[i].ent_llists);
-    }
-    free(ht->bucket);
-    ht_cont_llist* tmp_l_n;
-    while(tmp_l != NULL)
-    {
-        ht_ent_llist* tmp_e_n;
-        tmp_e = tmp_l->ent_llist;
-        while(tmp_e != NULL)
-        {
-           if(tmp_e->key)
-                free(tmp_e->key);
-            tmp_e->parent = NULL;
-            tmp_e_n = tmp_e->next;
-            free(tmp_e);
-            tmp_e = tmp_e_n;
-        }
-        tmp_l_n = tmp_l->next;
-        free(tmp_l);
-        tmp_l = tmp_l_n;
-    }
-    free(ht);
-}
-int _ht_cont_ll_remove(hashtable* ht, ht_cont_llist* ll_p)
-{
-    if(!ht)
-        return 1;
-    if(ll_p)
-        return 1;
-    if(ll_p->prev == NULL)
-    {
-        if(ll_p->next == NULL)
-        {
-            ll_p->hash = 0;
-            ll_p->ent_llist = NULL;
-            ll_p->next = NULL;
-            return 0;
-        }
-        if(ll_p->next != NULL)
-        {
-            ht->cont_llist_tail = ll_p->next;
-            ht->cont_llist_head = ll_p->next;
-            ll_p->ent_llist = NULL;
-            ll_p->hash = 0;
-            return 0;
-        }
-    }
-    if(ll_p->prev != NULL)
-    {
-        if(ll_p->next == NULL)
-        {
-                ll_p->prev->next = NULL;
-                ht->cont_llist_tail = ll_p->prev;
-                ll_p->ent_llist = NULL;
-                ll_p->hash = 0;
-                ll_p->prev = NULL;
-                ll_p->next = NULL;
-                free(ll_p);
-                return 0;
-        }
-        if(ll_p->next != NULL)
-        {
-            ll_p->prev->next = ll_p->next;
-            ll_p->next->prev = ll_p->prev;
-            ll_p->next = NULL;
-            ll_p->prev = NULL;
-            ll_p->hash = 0;
-            ll_p->ent_llist = NULL;
-            free(ll_p);
-            return 0;
-        }
-    }
-    return 1;
-}
-int hashtable_remove(hashtable* ht, char* key)
-{
-    if(!ht)
-        return 1;
-    uint64_t hash = hash_func(key);
-    uint64_t index = hash%ht->size;
-    ht_ent_llist* tmp_e = NULL;
-    ht_cont_llist* tmp_l = NULL;
-    if(ht->bucket[index].used == 0)
-        return 2;
-    if(ht->bucket[index].used != 0 )
-    {
-        int i = 0;
-        for(i = 0; i < ht->bucket[index].used; i++)
-        {
-          if(ht->bucket[index].ent_llists[i] != NULL)
-          {
-            if(ht->bucket[index].ent_llists[i]->parent->hash == hash)
-            {
-                tmp_l = ht->bucket[index].ent_llists[i]->parent;
-                tmp_e = ht->bucket[index].ent_llists[i];
-                if(ht->bucket[index].used - 1 == i)
-                    ht->bucket[index].used--;
-                break;
             }
-          }
-        }
-        int nu = 0;
-        for(int i = 0; i < ht->bucket[index].used;i++)
-        {
-            if(ht->bucket[index].ent_llists[i] == NULL)
-                nu++;
-        }
-        if(nu == (ht->bucket[index].used - 1))
-        {
-            ht->bucket[index].used = 0;
-            ht->free_buckets++;
-        }
-        if(tmp_l)
-        {
-                if(tmp_e->next == NULL)
-                {
-                    free(tmp_e->key);
-                    //free(tmp_e);
-                    tmp_e->key = NULL;
-                    tmp_e->vptr = NULL;
-                    _ht_cont_ll_remove(ht,tmp_l);
-                    ht->bucket[index].ent_llists[i] = NULL;
-                    if(ht->bucket[index].used == i+1 && ht->bucket[index].used >= 1)
-                        ht->bucket[index].used--;
+                if(strcmp(tmp_e->key,key) == 0){
+                    //printf("key overwrite %s %s\n",key,tmp_e->key);
+                    tmp_e->data = vptr;
+                    tmp_e->keylen = keylen;
+                    tmp_e->meta = meta;
                     return 0;
                 }
-                if(tmp_e->next != NULL)
-                {
-                    while(tmp_e->next != NULL && strcmp(tmp_e->key,key) != 0)
-                    {
-                        tmp_e = tmp_e->next;
-                    }
-                    if(strcmp(tmp_e->key,key) == 0)
-                    {
-                        if(tmp_e->next != NULL)
-                        {
-                            if(tmp_e->prev != NULL)
-                            {
-                                tmp_e->prev->next = tmp_e->next;
-                                tmp_e->next->prev = tmp_e->prev;
-                            }
-                            if(tmp_e->prev == NULL)
-                            {
-                                tmp_l->ent_llist = tmp_e->next;
-                                ht->bucket[index].ent_llists[i] = tmp_l->ent_llist;
-                                tmp_e->next->prev = NULL;
-                            }
-                        }
-                        if(tmp_e->next == NULL)
-                        {
-                           if(tmp_e->prev != NULL)
-                           {
-                                tmp_e->prev->next = NULL;
-                           }
-                           if(tmp_e->prev == NULL)
-                           {
-                                _ht_cont_ll_remove(ht,tmp_l);
-                                ht->bucket[index].ent_llists[i] = NULL;
-                                if(ht->bucket[index].used == i+1)
-                                    ht->bucket[index].used--;
-                           }
-                        }
-                        free(tmp_e->key);
-                        tmp_e->key = NULL;
-                        tmp_e->vptr = NULL;
-                        free(tmp_e);
-                        tmp_e = NULL;
-                        return 0;
-                    }
-                }
+            //printf("key collision\n");
+            tmp_e->next = calloc(1,sizeof(*tmp_e->next));
+            if(!tmp_e->next)
+                return ALLOC_ERR;
+            tmp_e->next->parent = tmp_l;
+            tmp_e->next->prev = tmp_e;
+            tmp_e = tmp_e->next;
+            tmp_e->data = vptr;
+            tmp_e->key = key;
+            tmp_e->keylen = keylen;
+            tmp_e->meta = meta;
+            return 0;
+        }else{
+           // printf("bucket collide 2\n");
+            while(tmp_c->next != NULL) tmp_c = tmp_c->next;
+            tmp_c->next = calloc(1,sizeof(*tmp_c->next));
+            if(!tmp_c->next) return ALLOC_ERR;
+            tmp_c->next->prev = tmp_c;
+            tmp_c = tmp_c->next;
+            tmp_l = calloc(1,sizeof(*tmp_l));
+            if(!tmp_l)
+                return ALLOC_ERR;
+            ht->llist_tail->next = tmp_l;
+            tmp_l->prev = ht->llist_tail;
+            ht->llist_tail = tmp_l;
+            tmp_l->entry = calloc(1,sizeof(*tmp_l->entry));
+            if(!tmp_l->entry) return ALLOC_ERR;
+            tmp_l->hash = hash;
+            tmp_c->llist = tmp_l;
+            tmp_e = tmp_l->entry;
+            tmp_e->prev = NULL;
+            tmp_e->parent = tmp_l;
+            tmp_e->data = vptr;
+            tmp_e->key = key;
+            tmp_e->keylen = keylen;
+            tmp_e->meta = meta;
+            bucket->occup++;
+            if(bucket->occup == ht->coll_pbuck) bucket->full = true;
+            return 0;
         }
-        if(!tmp_l)
-            return 2;
     }
 }
-int main(void){
-    FILE* fp = fopen("words.txt","r");
-    if(!fp)
-    {
-        perror("");
-        exit(-1);
+
+int hashtable_rehash(struct hashtable* ht,uint64_t size)
+{
+    if(!ht) return ARG_ERR;
+    free(ht->bucket);
+    ht->bucket = calloc(size,sizeof(*ht->bucket));
+    if(!ht->bucket) return ALLOC_ERR;
+    ht->bucket_amm = size;
+    ht->empty = size;
+    ht->rehashes++;
+    struct ht_llist* tmp_l = ht->llist_head;
+    struct ht_bucket* bucket = NULL;
+    uint64_t index = 0;
+    while(tmp_l){
+        if(ht->empty == 0)
+            return ENOSPACE;
+        index =  tmp_l->hash % ht->bucket_amm;
+        bucket = &ht->bucket[index];
+        if(bucket->full == true){
+            for(int i = index; i < ht->bucket_amm && i != (index - 1); i++){
+                while(bucket->next != NULL && bucket->full == true) bucket = bucket->next;
+
+                if(bucket->full == false) break;
+
+                if(ht->bucket[i].full == false){
+                    bucket->next = &ht->bucket[i];
+                    bucket->next->prev = bucket;
+                }
+                if(i == ht->bucket_amm - 1) i = 0;
+            }
+        }
+        if(bucket->llist_cont == NULL){
+            bucket->llist_cont = calloc(1,sizeof(*bucket->llist_cont));
+            if(!bucket->llist_cont) return ALLOC_ERR;
+            bucket->llist_cont->llist = tmp_l;
+            bucket->occup++;
+            ht->empty--;
+        }
+        else{
+            struct ht_llist_cont* tmp_c = bucket->llist_cont;
+            while(tmp_c->next != NULL) tmp_c = tmp_c->next;
+            tmp_c->next = calloc(1,sizeof(*tmp_c->next));
+            if(!tmp_c->next) return ALLOC_ERR;
+            tmp_c->next->prev = tmp_c;
+            tmp_c = tmp_c->next;
+            tmp_c->llist = tmp_l;
+            bucket->occup++;
+            if(bucket->occup == ht->coll_pbuck)
+                bucket->full = true;
+        }
+        tmp_l = tmp_l->next;
     }
+    return 0;
+}
+
+int hashtable_get(struct hashtable* ht, char* key, uint32_t keylen, void** out)
+{
+    if(!ht)
+        return ARG_ERR;
+    if(!key)
+        return ARG_ERR;
+    struct ht_bucket* bucket = NULL;
+    struct ht_llist_cont* tmp_c = NULL;
+    struct ht_entry* tmp_e = NULL;
+    struct ht_llist* tmp_l = NULL;
+    uint64_t hash = _hash_fnc(key,keylen);
+    uint64_t index = hash % ht->bucket_amm;
+    bucket = &ht->bucket[index];
+    while(bucket){
+        if(bucket->freed == true){
+            bucket = bucket->next;
+            continue;
+        }
+        if(bucket->llist_cont != NULL)
+            tmp_c = bucket->llist_cont;
+        else{
+            bucket = bucket->next;
+            continue;
+        }
+        while(tmp_c){
+            tmp_l = tmp_c->llist;
+            if(tmp_l->last_acc){
+                if(tmp_l->last_acc->parent->hash == hash && strncmp(tmp_l->last_acc->key,key,tmp_l->last_acc->keylen) == 0){
+                    *out = tmp_l->last_acc->data;
+                    return 0;
+                }
+            }
+            if(tmp_l->hash == hash){
+                tmp_e = tmp_l->entry;
+                while(tmp_e){
+                    if(tmp_e->keylen == keylen){
+                        if(strncmp(key,tmp_e->key,tmp_e->keylen) == 0){
+                            *out = tmp_e->data;
+                            tmp_l->last_acc = tmp_e;
+                            return 0;
+                        }
+                    }
+                    tmp_e = tmp_e->next;
+                }
+            }
+            tmp_c = tmp_c->next;
+        }
+        bucket = bucket->next;
+    }
+    return ENOTFOUND;
+}
+
+int hashtable_get_key(struct hashtable* ht, char* key, uint32_t keylen, char** out)
+{
+    if(!ht)
+        return ARG_ERR;
+    if(!key)
+        return ARG_ERR;
+    struct ht_bucket* bucket = NULL;
+    struct ht_llist_cont* tmp_c = NULL;
+    struct ht_entry* tmp_e = NULL;
+    struct ht_llist* tmp_l = NULL;
+    uint64_t hash = _hash_fnc(key,keylen);
+    uint64_t index = hash % ht->bucket_amm;
+    bucket = &ht->bucket[index];
+    while(bucket){
+        if(bucket->freed == true){
+            bucket = bucket->next;
+            continue;
+        }
+        if(bucket->llist_cont != NULL)
+            tmp_c = bucket->llist_cont;
+        else{
+            bucket = bucket->next;
+            continue;
+        }
+        while(tmp_c){
+            tmp_l = tmp_c->llist;
+            if(tmp_l->last_acc){
+                if(tmp_l->last_acc->parent->hash == hash && strncmp(tmp_l->last_acc->key,key,tmp_l->last_acc->keylen) == 0){
+                    *out = tmp_l->last_acc->key;
+                    return 0;
+                }
+            }
+            if(tmp_l->hash == hash){
+                tmp_e = tmp_l->entry;
+                while(tmp_e){
+                    if(tmp_e->keylen == keylen){
+                        if(strncmp(key,tmp_e->key,tmp_e->keylen) == 0){
+                            *out = tmp_e->key;
+                            tmp_l->last_acc = tmp_e;
+                            return 0;
+                        }
+                    }
+                    tmp_e = tmp_e->next;
+                }
+            }
+            tmp_c = tmp_c->next;
+        }
+        bucket = bucket->next;
+    }
+    return ENOTFOUND;
+}
+
+int hashtable_get_bucket(struct hashtable* ht, char* key, uint32_t keylen, struct ht_bucket** out)
+{
+    if(!ht)
+        return ARG_ERR;
+    if(!key)
+        return ARG_ERR;
+    struct ht_bucket* bucket = NULL;
+    struct ht_llist_cont* tmp_c = NULL;
+    struct ht_entry* tmp_e = NULL;
+    struct ht_llist* tmp_l = NULL;
+    uint64_t hash = _hash_fnc(key,keylen);
+    uint64_t index = hash % ht->bucket_amm;
+    bucket = &ht->bucket[index];
+    while(bucket){
+        if(bucket->freed == true){
+            bucket = bucket->next;
+            continue;
+        }
+        if(bucket->llist_cont != NULL)
+            tmp_c = bucket->llist_cont;
+        else{
+            bucket = bucket->next;
+            continue;
+        }
+        tmp_l = tmp_c->llist;
+        while(tmp_c){
+            if(tmp_l->hash == hash){
+                tmp_e = tmp_l->entry;
+                while(tmp_e){
+                    if(tmp_e->keylen == keylen){
+                        if(strncmp(key,tmp_e->key,tmp_e->keylen) == 0){
+                            *out = bucket;
+                            return 0;
+                        }
+                    }
+                    tmp_e = tmp_e->next;
+                }
+            }
+            tmp_c = tmp_c->next;
+        }
+        bucket = bucket->next;
+    }
+    *(int*)321 = 321;
+    return ENOTFOUND;
+}
+
+int _hashtable_get_cont_from_bucket(struct ht_bucket* bucket, char* key, uint32_t keylen, struct ht_llist_cont** out)
+{
+    if(!bucket)
+        return ARG_ERR;
+    if(!key)
+        return ARG_ERR;
+    struct ht_llist_cont* tmp_c = NULL;
+    struct ht_entry* tmp_e = NULL;
+    struct ht_llist* tmp_l = NULL;
+    uint64_t hash = _hash_fnc(key,keylen);
+    while(bucket){
+        if(bucket->freed == true){
+            bucket = bucket->next;
+            continue;
+        }
+        if(bucket->llist_cont != NULL)
+            tmp_c = bucket->llist_cont;
+        else{
+            bucket = bucket->next;
+            continue;
+        }
+        while(tmp_c){
+            tmp_l = tmp_c->llist;
+            if(tmp_l->hash == hash){
+                tmp_e = tmp_l->entry;
+                while(tmp_e){
+                    if(tmp_e->keylen == keylen){
+                        if(strncmp(key,tmp_e->key,tmp_e->keylen) == 0){
+                            *out = tmp_c;
+                            return 0;
+                        }
+                    }
+                    tmp_e = tmp_e->next;
+                }
+            }
+            tmp_c = tmp_c->next;
+        }
+        bucket = bucket->next;
+    }
+    return ENOTFOUND;
+}
+
+int _hashtable_get_entry_from_ll(struct ht_llist* tmp_l, char* key, uint32_t keylen, struct ht_entry** out)
+{
+    if(!tmp_l)
+        return ARG_ERR;
+    if(!key)
+        return ARG_ERR;
+    struct ht_llist_cont* tmp_c = NULL;
+    struct ht_entry* tmp_e = NULL;
+    uint64_t hash = _hash_fnc(key,keylen);
+            if(tmp_l->hash == hash){
+                tmp_e = tmp_l->entry;
+                while(tmp_e){
+                    if(tmp_e->keylen == keylen){
+                        if(strncmp(key,tmp_e->key,tmp_e->keylen) == 0){
+                            *out = tmp_e;
+                            return 0;
+                        }
+                    }
+                    tmp_e = tmp_e->next;
+                }
+            }
+    return ENOTFOUND;
+}
+
+int hashtable_remove_entry(struct hashtable* ht,char* key,uint32_t keylen)
+{
+    if(!key) return ARG_ERR;
+    if(!ht) return ARG_ERR;
+    struct ht_bucket* bucket =  NULL;
+    int ret = hashtable_get_bucket(ht,key,keylen,&bucket);
+    if(ret != 0) return ret;
+    struct ht_llist_cont* tmp_c = NULL;
+    struct ht_llist* tmp_l = NULL;
+    ret = _hashtable_get_cont_from_bucket(bucket,key,keylen,&tmp_c);
+    if(ret != 0) return ret;
+    if(tmp_c == NULL) return ARG_ERR;
+    if(!bucket) return ENOTFOUND;
+    tmp_l = tmp_c->llist;
+    struct ht_entry* tmp_e = NULL;
+    int eret = _hashtable_get_entry_from_ll(tmp_l,key,keylen,&tmp_e);
+    if(eret != 0) return eret+22;
+    if(tmp_e->next == NULL && tmp_e->prev == NULL){
+        if(tmp_l->next && tmp_l->prev){
+            tmp_l->prev->next = tmp_l->next;
+            tmp_l->next->prev = tmp_l->prev;
+            free(tmp_l);
+            free(tmp_e);
+            return 0;
+        }
+        if(tmp_l->next && tmp_l->prev == NULL){
+            ht->llist_head = tmp_l->next;
+            ht->llist_head->prev = NULL;
+            free(tmp_l);
+            free(tmp_e);
+            return 0;
+        }
+        if(tmp_l->next == NULL && tmp_l->prev){
+            tmp_l->prev->next = NULL;
+            free(tmp_e);
+            free(tmp_l);
+            return 0;
+        }
+        if(tmp_l->next == NULL && tmp_l->prev == NULL){
+            memset(tmp_l,0,sizeof(*tmp_l));
+            free(tmp_e);
+            return 0;
+        }
+        if(tmp_c->next && tmp_c->prev){
+            tmp_c->prev->next = tmp_c->next;
+            tmp_c->next->prev = tmp_c->prev;
+            bucket->occup--;
+            free(tmp_c);
+            printf("SSS");
+            return 0;
+        }
+        if(tmp_c->prev == NULL && tmp_c->next){
+            bucket->llist_cont = tmp_c->next;
+            tmp_c->next->prev = NULL;
+            bucket->occup--;
+            free(tmp_c);
+            printf("DDD");
+            return 0;
+        }
+        if(tmp_c->prev && tmp_c->next == NULL){
+            tmp_c->prev->next = NULL;
+            bucket->occup--;
+            free(tmp_c);
+            printf("fff");
+            return 0;
+        }
+        if(tmp_c->prev == NULL && tmp_c->next == NULL){
+            bucket->llist_cont = NULL;
+            free(tmp_c);
+            printf("^");
+            if(bucket->next && bucket->prev){
+                struct ht_bucket* tmp_b_n = bucket->next;
+                struct ht_bucket* tmp_b_p = bucket->prev;
+                bucket->prev->next = bucket->next;
+                bucket->next->prev = bucket->prev;
+                memset(bucket,0,sizeof(*bucket));
+                bucket->prev = tmp_b_p;
+                bucket->next = tmp_b_n;
+                bucket->freed  = true;
+                ht->empty++;
+                printf("||||||||||||");
+                return 0;
+            }
+            if(bucket->next && !bucket->prev){
+                bucket->freed = true;
+                bucket->full = false;
+                ht->empty++;
+                bucket->occup = 0;
+                printf("#");
+                return 0;
+            }
+            if(!bucket->next && bucket->prev){
+                bucket->prev->next = NULL;
+                ht->empty++;
+                memset(bucket,0,sizeof(*bucket));
+                printf("@");
+                return 0;
+            }
+            if(!bucket->next && !bucket->prev){
+                memset(bucket,0,sizeof(*bucket));
+                ht->empty++;
+                printf("!");
+                return 0;
+            }
+        }
+    }else{
+        if(tmp_e->prev && tmp_e->next){
+            tmp_e->prev->next = tmp_e->next;
+            tmp_e->next->prev = tmp_e->prev;
+            free(tmp_e);
+            return  0;
+        }
+        if(tmp_e->prev == NULL && tmp_e->next){
+            tmp_l->entry = tmp_e->next;
+            free(tmp_e);
+            return 0;
+        }
+        if(tmp_e->prev && tmp_e->next == NULL){
+            tmp_e->prev->next = NULL;
+            free(tmp_e);
+            return 0;
+        }
+    }
+}
+
+int main(void)
+{
+    struct hashtable* ht = NULL;
+    hashtable_create(&ht,1999181,1);
     char buffer[512];
-    hashtable* ht = hashtable_new();
-    while(fgets(buffer,512,fp)){
-        hashtable_add(ht,buffer,strdup(buffer));
+    FILE* fp = fopen("words.txt","r");
+    if(!fp){
+        perror("fopen");
+        exit(1);
+    }
+    while(fgets(buffer,512,fp))
+    {
+        if(hashtable_add(ht,strdup(buffer),strlen(buffer),strdup(buffer),123)){
+            printf("PANIC\n");
+            getchar();
+            exit(1);
+        }
+        printf("%s",buffer);
     }
     fseek(fp,0,SEEK_SET);
-    while(fgets(buffer,512,fp)){
-    hashtable_get(ht,buffer);
+    //hashtable_add(ht,strdup("zupanate"),strlen("zupafnate"),strdup("zupanate"),123);
+        char* out = NULL;
+    //hashtable_add(ht,strdup("zupanate"),strlen("zupafnate"),strdup("zupanate"),123);
+    struct ht_llist* tmp_l = ht->llist_head;
+    printf("empty %d\n ammount %d\n",ht->empty,ht->bucket_amm);
+    printf("press to start\n");
+    getchar();
+    while(tmp_l != NULL){
+            struct ht_entry* tmp_e = tmp_l->entry;
+            int i = 0;
+            while(tmp_e != NULL){
+                void* key = NULL;
+                hashtable_get_key(ht,tmp_e->key,tmp_e->keylen,&key);
+                int ret = hashtable_remove_entry(ht,tmp_e->key,tmp_e->keylen);
+                int ret2 = 0;
+                if(ret != 0){
+                    ret2 = hashtable_get(ht,tmp_e->key,tmp_e->keylen,&out);
+                    printf("%d,%s : %d %d\n",ret,tmp_e->key,ret2,i);
+                    *(int*)0x123 = 1;
+                }
+                free(key);
+                if(tmp_e)
+                    tmp_e = tmp_e->next;
+                else
+                    break;
+                i++;
+            }
+        tmp_l = tmp_l->next;
     }
+    printf("empty %d\n",ht->empty);
+    printf("press to start\n");
+    getchar();
+    while(fgets(buffer,512,fp))
+    {
+        if(hashtable_add(ht,strdup(buffer),strlen(buffer),strdup(buffer),123)){
+            printf("PANIC\n");
+            getchar();
+            exit(1);
+        }
+        buffer[0] = '\0';
+        printf("i am not dead yet\n");
+    }
+    printf("empty %d\n",ht->empty);
 }
