@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
-
 #define ALLOC_ERR 2
 #define ARG_ERR 1
 #define ENOTFOUND 4
@@ -35,6 +34,7 @@ struct ht_llist_cont{
     struct ht_llist* llist;    //list of key/value pairs
     struct ht_llist_cont* next; //separate chaining
     struct ht_llist_cont* prev;
+    struct ht_bucket* parent;
 };
 
 struct ht_bucket{
@@ -130,11 +130,11 @@ int hashtable_add(struct hashtable* ht,char* key,uint32_t keylen,void* vptr,uint
             while(bucket->next != NULL && bucket->full == true) bucket = bucket->next;
 
             if(bucket->freed == true){
-                memset(bucket,0,sizeof(*bucket));
+                bucket->freed = false;
             }
             if(bucket->full == false) break;
 
-            if(ht->bucket[i].full == false){
+            if(ht->bucket[i].full == false && ht->bucket[i].prev == NULL){
                 bucket->next = &ht->bucket[i];
                 bucket->next->prev = bucket;
             }
@@ -172,6 +172,7 @@ int hashtable_add(struct hashtable* ht,char* key,uint32_t keylen,void* vptr,uint
         tmp_e->keylen = keylen;
         tmp_e->meta = meta;
         bucket->llist_cont->llist = tmp_l;
+        bucket->llist_cont->parent = bucket;
         ht->empty--;
         bucket->occup++;
         if(bucket->occup == ht->coll_pbuck)
@@ -222,6 +223,7 @@ int hashtable_add(struct hashtable* ht,char* key,uint32_t keylen,void* vptr,uint
             if(!tmp_l->entry) return ALLOC_ERR;
             tmp_l->hash = hash;
             tmp_c->llist = tmp_l;
+            tmp_c->parent = bucket;
             tmp_e = tmp_l->entry;
             tmp_e->prev = NULL;
             tmp_e->parent = tmp_l;
@@ -259,7 +261,7 @@ int hashtable_rehash(struct hashtable* ht,uint64_t size)
 
                 if(bucket->full == false) break;
 
-                if(ht->bucket[i].full == false){
+                if(ht->bucket[i].full == false && ht->bucket[i].prev == NULL){
                     bucket->next = &ht->bucket[i];
                     bucket->next->prev = bucket;
                 }
@@ -270,6 +272,7 @@ int hashtable_rehash(struct hashtable* ht,uint64_t size)
             bucket->llist_cont = calloc(1,sizeof(*bucket->llist_cont));
             if(!bucket->llist_cont) return ALLOC_ERR;
             bucket->llist_cont->llist = tmp_l;
+            bucket->llist_cont->parent = bucket;
             bucket->occup++;
             ht->empty--;
         }
@@ -280,6 +283,7 @@ int hashtable_rehash(struct hashtable* ht,uint64_t size)
             if(!tmp_c->next) return ALLOC_ERR;
             tmp_c->next->prev = tmp_c;
             tmp_c = tmp_c->next;
+            tmp_c->parent = bucket;
             tmp_c->llist = tmp_l;
             bucket->occup++;
             if(bucket->occup == ht->coll_pbuck)
@@ -436,7 +440,6 @@ int hashtable_get_bucket(struct hashtable* ht, char* key, uint32_t keylen, struc
         }
         bucket = bucket->next;
     }
-    *(int*)321 = 321;
     return ENOTFOUND;
 }
 
@@ -522,7 +525,7 @@ int hashtable_remove_entry(struct hashtable* ht,char* key,uint32_t keylen)
     tmp_l = tmp_c->llist;
     struct ht_entry* tmp_e = NULL;
     int eret = _hashtable_get_entry_from_ll(tmp_l,key,keylen,&tmp_e);
-    if(eret != 0) return eret+22;
+    if(eret != 0) return eret;
     if(tmp_e->next == NULL && tmp_e->prev == NULL){
         if(tmp_l->next && tmp_l->prev){
             tmp_l->prev->next = tmp_l->next;
@@ -554,7 +557,6 @@ int hashtable_remove_entry(struct hashtable* ht,char* key,uint32_t keylen)
             tmp_c->next->prev = tmp_c->prev;
             bucket->occup--;
             free(tmp_c);
-            printf("SSS");
             return 0;
         }
         if(tmp_c->prev == NULL && tmp_c->next){
@@ -562,31 +564,27 @@ int hashtable_remove_entry(struct hashtable* ht,char* key,uint32_t keylen)
             tmp_c->next->prev = NULL;
             bucket->occup--;
             free(tmp_c);
-            printf("DDD");
             return 0;
         }
         if(tmp_c->prev && tmp_c->next == NULL){
             tmp_c->prev->next = NULL;
             bucket->occup--;
             free(tmp_c);
-            printf("fff");
             return 0;
         }
         if(tmp_c->prev == NULL && tmp_c->next == NULL){
             bucket->llist_cont = NULL;
             free(tmp_c);
-            printf("^");
             if(bucket->next && bucket->prev){
                 struct ht_bucket* tmp_b_n = bucket->next;
                 struct ht_bucket* tmp_b_p = bucket->prev;
                 bucket->prev->next = bucket->next;
                 bucket->next->prev = bucket->prev;
                 memset(bucket,0,sizeof(*bucket));
-                bucket->prev = tmp_b_p;
+                bucket->prev = tmp_b_p;    //dirty search bug fix
                 bucket->next = tmp_b_n;
                 bucket->freed  = true;
                 ht->empty++;
-                printf("||||||||||||");
                 return 0;
             }
             if(bucket->next && !bucket->prev){
@@ -594,20 +592,17 @@ int hashtable_remove_entry(struct hashtable* ht,char* key,uint32_t keylen)
                 bucket->full = false;
                 ht->empty++;
                 bucket->occup = 0;
-                printf("#");
                 return 0;
             }
             if(!bucket->next && bucket->prev){
                 bucket->prev->next = NULL;
                 ht->empty++;
                 memset(bucket,0,sizeof(*bucket));
-                printf("@");
                 return 0;
             }
             if(!bucket->next && !bucket->prev){
                 memset(bucket,0,sizeof(*bucket));
                 ht->empty++;
-                printf("!");
                 return 0;
             }
         }
@@ -629,4 +624,6 @@ int hashtable_remove_entry(struct hashtable* ht,char* key,uint32_t keylen)
             return 0;
         }
     }
+    return 666;
 }
+
