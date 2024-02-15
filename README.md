@@ -2,6 +2,7 @@
 hashtable realization using two different collision handling methods
 
 **error codes:**
+
    666 unknown code error;
    
    ENOTFOUND(int 4) not found
