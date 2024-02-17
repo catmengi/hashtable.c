@@ -17,4 +17,5 @@ int hashtable_iterate(
                       hashtable_t ht,
                       int (*cmp)(char* key,uint64_t keylen, void* data, uint64_t meta),
                       void (*do_some)(char* key,uint64_t keylen, void* data, uint64_t meta,void* usr, uint64_t len),
-                      void* usr,uint64_t len);
+                      void* usr,uint64_t len
+                     );
