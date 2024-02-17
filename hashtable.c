@@ -111,15 +111,13 @@ int hashtable_add(struct hashtable* ht,char* key,uint32_t keylen,void* vptr,uint
     struct ht_entry* tmp_e = NULL;
     if(ht->empty == 0){
         int ret = 0;
-        ret = hashtable_rehash(ht,ht->bucket_amm + (ht->bucket_amm * 0.75f));
-        if(ret == ENOSPACE){
-            while(ret == ENOSPACE){
-                ret = hashtable_rehash(ht,ht->bucket_amm + (ht->bucket_amm * 0.75f));
-            }
+        ret = hashtable_rehash(ht,ht->bucket_amm + (ht->bucket_amm * 2));
+        while(ret == ENOSPACE){
+            ret = hashtable_rehash(ht,ht->bucket_amm + (ht->bucket_amm * 2));
         }
         if(ret != 0) return ret;
         index = hash % ht->bucket_amm;
-        if(ht->rehashes % 10)
+        if(ht->rehashes % 10 == 0)
             ht->coll_pbuck++;
         ht->rehashes++;
         //todo rehash!!!!
@@ -168,7 +166,7 @@ int hashtable_add(struct hashtable* ht,char* key,uint32_t keylen,void* vptr,uint
         tmp_e = tmp_l->entry;
         tmp_e->parent = tmp_l;
         tmp_e->data = vptr;
-        tmp_e->key = key;
+        tmp_e->key = strdup(key);
         tmp_e->keylen = keylen;
         tmp_e->meta = meta;
         bucket->llist_cont->llist = tmp_l;
@@ -202,7 +200,7 @@ int hashtable_add(struct hashtable* ht,char* key,uint32_t keylen,void* vptr,uint
             tmp_e->next->prev = tmp_e;
             tmp_e = tmp_e->next;
             tmp_e->data = vptr;
-            tmp_e->key = key;
+            tmp_e->key = strdup(key);
             tmp_e->keylen = keylen;
             tmp_e->meta = meta;
             return 0;
@@ -228,7 +226,7 @@ int hashtable_add(struct hashtable* ht,char* key,uint32_t keylen,void* vptr,uint
             tmp_e->prev = NULL;
             tmp_e->parent = tmp_l;
             tmp_e->data = vptr;
-            tmp_e->key = key;
+            tmp_e->key = strdup(key);
             tmp_e->keylen = keylen;
             tmp_e->meta = meta;
             bucket->occup++;
@@ -241,6 +239,19 @@ int hashtable_add(struct hashtable* ht,char* key,uint32_t keylen,void* vptr,uint
 int hashtable_rehash(struct hashtable* ht,uint64_t size)
 {
     if(!ht) return ARG_ERR;
+    for(int i = 0; i < ht->bucket_amm; i++){
+    struct ht_bucket* bucket = &ht->bucket[i];
+    while(bucket){
+    struct ht_llist_cont* tmp_c  = bucket->llist_cont;
+        while(tmp_c){
+            struct ht_llist_cont* n = tmp_c->next;
+            free(tmp_c);
+            tmp_c = n;
+        }
+        bucket->llist_cont = NULL;
+        bucket = bucket->next;
+        }
+    }
     free(ht->bucket);
     ht->bucket = calloc(size,sizeof(*ht->bucket));
     if(!ht->bucket) return ALLOC_ERR;
@@ -398,7 +409,7 @@ int hashtable_get_key(struct hashtable* ht, char* key, uint32_t keylen, char** o
     return ENOTFOUND;
 }
 
-int hashtable_get_bucket(struct hashtable* ht, char* key, uint32_t keylen, struct ht_bucket** out)
+int _hashtable_get_bucket(struct hashtable* ht, char* key, uint32_t keylen, struct ht_bucket** out)
 {
     if(!ht)
         return ARG_ERR;
@@ -514,7 +525,7 @@ int hashtable_remove_entry(struct hashtable* ht,char* key,uint32_t keylen)
     if(!key) return ARG_ERR;
     if(!ht) return ARG_ERR;
     struct ht_bucket* bucket =  NULL;
-    int ret = hashtable_get_bucket(ht,key,keylen,&bucket);
+    int ret = _hashtable_get_bucket(ht,key,keylen,&bucket);
     if(ret != 0) return ret;
     struct ht_llist_cont* tmp_c = NULL;
     struct ht_llist* tmp_l = NULL;
@@ -531,27 +542,29 @@ int hashtable_remove_entry(struct hashtable* ht,char* key,uint32_t keylen)
             tmp_l->prev->next = tmp_l->next;
             tmp_l->next->prev = tmp_l->prev;
             free(tmp_l);
-            free(tmp_e);
-            return 0;
+            free(tmp_e->key);free(tmp_e);
+            goto LINK;
         }
         if(tmp_l->next && tmp_l->prev == NULL){
             ht->llist_head = tmp_l->next;
             ht->llist_head->prev = NULL;
             free(tmp_l);
-            free(tmp_e);
-            return 0;
+            free(tmp_e->key);free(tmp_e);
+            goto LINK;
         }
         if(tmp_l->next == NULL && tmp_l->prev){
             tmp_l->prev->next = NULL;
-            free(tmp_e);
+            ht->llist_tail = tmp_l->prev;
+            free(tmp_e->key);free(tmp_e);
             free(tmp_l);
-            return 0;
+            goto LINK;
         }
         if(tmp_l->next == NULL && tmp_l->prev == NULL){
             memset(tmp_l,0,sizeof(*tmp_l));
-            free(tmp_e);
-            return 0;
+            free(tmp_e->key);free(tmp_e);
+            goto LINK;
         }
+        LINK:
         if(tmp_c->next && tmp_c->prev){
             tmp_c->prev->next = tmp_c->next;
             tmp_c->next->prev = tmp_c->prev;
@@ -610,20 +623,78 @@ int hashtable_remove_entry(struct hashtable* ht,char* key,uint32_t keylen)
         if(tmp_e->prev && tmp_e->next){
             tmp_e->prev->next = tmp_e->next;
             tmp_e->next->prev = tmp_e->prev;
-            free(tmp_e);
+            free(tmp_e->key);free(tmp_e);
             return  0;
         }
         if(tmp_e->prev == NULL && tmp_e->next){
             tmp_l->entry = tmp_e->next;
-            free(tmp_e);
+            free(tmp_e->key);free(tmp_e);
             return 0;
         }
         if(tmp_e->prev && tmp_e->next == NULL){
             tmp_e->prev->next = NULL;
-            free(tmp_e);
+            free(tmp_e->key);free(tmp_e);
             return 0;
         }
     }
     return 666;
+}
+
+void hashtable_free(struct hashtable* ht)
+{
+    if(!ht)
+        return;
+    for(int i = 0; i < ht->bucket_amm; i++){
+        struct ht_bucket* bucket = &ht->bucket[i];
+        while(bucket){
+            struct ht_llist_cont* tmp_c  = bucket->llist_cont;
+            while(tmp_c){
+                struct ht_llist_cont* n = tmp_c->next;
+                free(tmp_c);
+                tmp_c = n;
+            }
+            bucket->llist_cont = NULL;
+            bucket = bucket->next;
+        }
+    }
+    struct ht_llist* tmp_l = ht->llist_head;
+    while(tmp_l){
+        struct ht_llist* n = tmp_l->next;
+        struct ht_entry* tmp_e = tmp_l->entry;
+        while(tmp_e){
+            struct ht_entry* ne = tmp_e->next;
+            free(tmp_e->key);free(tmp_e);
+            tmp_e = ne;
+        }
+        free(tmp_l);
+        tmp_l = n;
+    }
+    free(ht->bucket);
+    free(ht);
+}
+int hashtable_iterate(
+                      struct hashtable* ht,
+                      int (*cmp)(char* key,uint64_t keylen, void* data, uint64_t meta),
+                      void (*do_some)(char* key,uint64_t keylen, void* data, uint64_t meta,void* usr, uint64_t len),
+                      void* usr,uint64_t len)
+{
+    if(!ht)
+        return ARG_ERR;
+    if(!cmp || !do_some)
+        return ARG_ERR;
+    for(int i = 0; i < ht->bucket_amm; i ++){
+        struct ht_llist_cont* tmp_c = ht->bucket[i].llist_cont;
+        while(tmp_c){
+            struct ht_entry* tmp_e = tmp_c->llist->entry;
+            while(tmp_e){
+                if(cmp(tmp_e->key,tmp_e->keylen,tmp_e->data,tmp_e->meta) == 1){
+                    do_some(tmp_e->key,tmp_e->keylen,tmp_e->data,tmp_e->meta,usr,len);
+                }
+                tmp_e = tmp_e->next;
+            }
+            tmp_c = tmp_c->next;
+        }
+    }
+    return 0;
 }
 
