@@ -27,14 +27,8 @@ int hashtable_add(hashtable_t ht,char* key,uint32_t keylen,void* vptr,uint64_t m
 int hashtable_rehash(hashtable_t ht,uint64_t size);                                              /*change size of hashtable*/
 
 
-int hashtable_get(hashtable_t ht, char* key, uint32_t keylen, void** out);                      //
+int hashtable_get(hashtable_t ht, char* key, uint32_t keylen, void** out); int hashtable_get_key(hashtable_t ht, char* key, uint32_t keylen, char** out);  /*return error code;pass pointer to data/key to out pointer*/
 
-                                                                                                //   get data/key from entry and pass pointer to it into out;
-                                                                                                
-                                                                                                //   return error code
-                                                                                                
-                                                                                                //
-int hashtable_get_key(hashtable_t ht, char* key, uint32_t keylen, char** out);                                      
 
 int hashtable_remove_entry(hashtable_t ht,char* key,uint32_t keylen);                                                       /*remove entry from hashtable dont affect data*/
 
