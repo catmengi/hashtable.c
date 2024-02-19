@@ -1,5 +1,5 @@
 # hashtable.c
-hashtable realization using two different collision handling methods
+hashtable realization using hybrid collision handling (open-addressing (low usage) separate chaining x2 (most of usage) Linked list backup storage for rehash)
 
 **error codes:**
 
