@@ -28,8 +28,11 @@ int hashtable_rehash(hashtable_t ht,uint64_t size);                             
 
 
 int hashtable_get(hashtable_t ht, char* key, uint32_t keylen, void** out);                      //
+
                                                                                                 //   get data/key from entry and pass pointer to it into out;
+                                                                                                
                                                                                                 //   return error code
+                                                                                                
                                                                                                 //
 int hashtable_get_key(hashtable_t ht, char* key, uint32_t keylen, char** out);                                      
 
