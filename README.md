@@ -18,7 +18,7 @@ hashtable realization using hybrid collision handling (open-addressing (low usag
 typedef struct hashtable* hashtable_t;                                                           /*hashtable undef type*/
  
 
-int hashtable_create(hashtable_t* ht,size_t size,size_t coll_pbuck);                             /*create new hashtable and pass it to hashtable_t pointer, with size and collisions per bucket*/        
+int hashtable_create(hashtable_t* ht,size_t size,size_t coll_pbuck);                             /*create new hashtable with size and collisions per bucket and pass it to hashtable_t pointer*/        
 
 
 int hashtable_add(hashtable_t ht,char* key,uint32_t keylen,void* vptr,uint64_t meta);            /*add new entry to hashtable*/
