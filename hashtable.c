@@ -185,13 +185,13 @@ int hashtable_add(struct hashtable* ht,char* key,uint32_t keylen,void* vptr,uint
             while(tmp_e->next != NULL && strcmp(tmp_e->key , key) != 0){
                 tmp_e = tmp_e->next;
             }
-                if(strcmp(tmp_e->key,key) == 0){
-                    //printf("key overwrite %s %s\n",key,tmp_e->key);
-                    tmp_e->data = vptr;
-                    tmp_e->keylen = keylen;
-                    tmp_e->meta = meta;
-                    return 0;
-                }
+            if(strcmp(tmp_e->key,key) == 0){
+                //printf("key overwrite %s %s\n",key,tmp_e->key);
+                tmp_e->data = vptr;
+                tmp_e->keylen = keylen;
+                tmp_e->meta = meta;
+                return 0;
+            }
             //printf("key collision\n");
             tmp_e->next = calloc(1,sizeof(*tmp_e->next));
             if(!tmp_e->next)
@@ -241,20 +241,19 @@ int hashtable_rehash(struct hashtable* ht,uint64_t size)
     if(!ht) return ARG_ERR;
     for(int i = 0; i < ht->bucket_amm; i++){
     struct ht_bucket* bucket = &ht->bucket[i];
-    while(bucket){
     struct ht_llist_cont* tmp_c  = bucket->llist_cont;
         while(tmp_c){
             struct ht_llist_cont* n = tmp_c->next;
             free(tmp_c);
             tmp_c = n;
         }
-        bucket->llist_cont = NULL;
-        bucket = bucket->next;
-        }
     }
-    free(ht->bucket);
-    ht->bucket = calloc(size,sizeof(*ht->bucket));
-    if(!ht->bucket) return ALLOC_ERR;
+    struct ht_bucket* nptr = realloc(ht->bucket,size*sizeof(struct ht_bucket));
+    if(nptr)
+        ht->bucket = nptr;
+    else
+        return ALLOC_ERR;
+    memset(ht->bucket,0,size*sizeof(struct ht_bucket));
     ht->bucket_amm = size;
     ht->empty = size;
     ht->rehashes++;
@@ -650,6 +649,13 @@ void hashtable_free(struct hashtable* ht)
             struct ht_llist_cont* tmp_c  = bucket->llist_cont;
             while(tmp_c){
                 struct ht_llist_cont* n = tmp_c->next;
+                struct ht_entry* tmp_e = tmp_c->llist->entry;
+                while(tmp_e){
+                    struct ht_entry* ne = tmp_e->next;
+                    free(tmp_e->key);free(tmp_e);
+                    tmp_e = ne;
+                }
+                free(tmp_c->llist);
                 free(tmp_c);
                 tmp_c = n;
             }
@@ -657,43 +663,29 @@ void hashtable_free(struct hashtable* ht)
             bucket = bucket->next;
         }
     }
-    struct ht_llist* tmp_l = ht->llist_head;
-    while(tmp_l){
-        struct ht_llist* n = tmp_l->next;
-        struct ht_entry* tmp_e = tmp_l->entry;
-        while(tmp_e){
-            struct ht_entry* ne = tmp_e->next;
-            free(tmp_e->key);free(tmp_e);
-            tmp_e = ne;
-        }
-        free(tmp_l);
-        tmp_l = n;
-    }
     free(ht->bucket);
     free(ht);
 }
 int hashtable_iterate(
                       struct hashtable* ht,
-                      int (*cmp)(char* key,uint64_t keylen, void* data, uint64_t meta),
+                      int (*cmp)(char* key,uint64_t keylen, void* data, uint64_t meta,void* usr, uint64_t len),
                       void (*do_some)(char* key,uint64_t keylen, void* data, uint64_t meta,void* usr, uint64_t len),
-                      void* usr,uint64_t len)
+                      void* usrc,uint64_t lenc,void* usrd, uint64_t lend)
 {
     if(!ht)
         return ARG_ERR;
     if(!cmp || !do_some)
         return ARG_ERR;
-    for(int i = 0; i < ht->bucket_amm; i ++){
-        struct ht_llist_cont* tmp_c = ht->bucket[i].llist_cont;
-        while(tmp_c){
-            struct ht_entry* tmp_e = tmp_c->llist->entry;
-            while(tmp_e){
-                if(cmp(tmp_e->key,tmp_e->keylen,tmp_e->data,tmp_e->meta) == 1){
-                    do_some(tmp_e->key,tmp_e->keylen,tmp_e->data,tmp_e->meta,usr,len);
-                }
-                tmp_e = tmp_e->next;
+    struct ht_llist* tmp_l = ht->llist_head;
+    while(tmp_l){
+        struct ht_entry* tmp_e = tmp_l->entry;
+        while(tmp_e){
+            if(cmp(tmp_e->key,tmp_e->keylen,tmp_e->data,tmp_e->meta,usrc,lenc)){
+                do_some(tmp_e->key,tmp_e->keylen,tmp_e->data,tmp_e->meta,usrd,lend);
             }
-            tmp_c = tmp_c->next;
+            tmp_e = tmp_e->next;
         }
+        tmp_l = tmp_l->next;
     }
     return 0;
 }
