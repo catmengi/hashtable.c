@@ -15,7 +15,7 @@ int hashtable_remove_entry(hashtable_t ht,char* key,uint32_t keylen);
 void hashtable_free(hashtable_t ht);
 int hashtable_iterate(
                       hashtable_t ht,
-                      int (*cmp)(char* key,uint64_t keylen, void* data, uint64_t meta),
+                      int (*cmp)(char* key,uint64_t keylen, void* data, uint64_t meta,void* usr, uint64_t len),
                       void (*do_some)(char* key,uint64_t keylen, void* data, uint64_t meta,void* usr, uint64_t len),
-                      void* usr,uint64_t len
+                      void* usrc,uint64_t lenc,void* usrd, uint64_t lend
                      );
